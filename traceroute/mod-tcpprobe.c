@@ -243,6 +243,7 @@ static int tcp_init (const sockaddr_any *dest,
 		}
 
 		sockaddr_any addr;
+		socklen_t len = sizeof(addr);
 
 		if (getsockname (fd, &addr.sa, &len) < 0)
 			error ("getsockname");
