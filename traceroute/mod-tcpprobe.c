@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <math.h>
+#include <time.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <poll.h>
@@ -293,7 +294,23 @@ static int tcp_init (const sockaddr_any *dest,
 
 	if (sleep_second > 0)
 	{
-		printf("sleeping %us\n", sleep_second);
+		int fd = socket (af, SOCK_RAW, IPPROTO_TCP);
+		
+		if (fd < 0)
+			error_or_perm ("socket");
+		
+		close(fd);
+
+		time_t rawtime;
+	 	struct tm * timeinfo;
+		char now[80] = {0};
+
+		time (&rawtime);
+		timeinfo = localtime (&rawtime);
+
+		strftime(now, sizeof(now),"%H:%M:%S", timeinfo);
+
+		printf("Now it's %s, sleeping %us\n", now, sleep_second);
 		sleep (sleep_second);
 	}
 
