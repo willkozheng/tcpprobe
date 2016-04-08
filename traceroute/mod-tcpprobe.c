@@ -304,13 +304,19 @@ static int tcp_init (const sockaddr_any *dest,
 		time_t rawtime;
 	 	struct tm * timeinfo;
 		char now[80] = {0};
+		char end[80] = {0};
 
 		time (&rawtime);
-		timeinfo = localtime (&rawtime);
+		timeinfo = localtime(&rawtime);
 
 		strftime(now, sizeof(now),"%H:%M:%S", timeinfo);
 
-		printf("Now it's %s, sleeping %us\n", now, sleep_second);
+		rawtime += sleep_second;
+		timeinfo = localtime(&rawtime);
+
+		strftime(end, sizeof(now),"%H:%M:%S", timeinfo);
+
+		printf("Now it's %s, sleeping %us, will end at %s\n", now, sleep_second, end);
 		sleep (sleep_second);
 	}
 
