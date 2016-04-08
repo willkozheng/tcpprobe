@@ -254,7 +254,7 @@ static int tcp_init (const sockaddr_any *dest,
 
 		printf("connected");
 		print_addr(&addr);
-		printf(":%u ->", ntohs(src_addr.sin.sin_port));
+		printf(":%u >", ntohs(src_addr.sin.sin_port));
 		print_addr(&dst);
 		printf(":%u", ntohs(dst.sin.sin_port));
 
@@ -316,7 +316,7 @@ static int tcp_init (const sockaddr_any *dest,
 
 		strftime(end, sizeof(now),"%H:%M:%S", timeinfo);
 
-		printf("Now it's %s, sleeping %us, will end at %s\n", now, sleep_second, end);
+		printf("Now it's %s, sleeping %us, will end at %s.\n", now, sleep_second, end);
 		sleep (sleep_second);
 	}
 
