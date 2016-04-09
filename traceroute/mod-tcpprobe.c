@@ -65,6 +65,8 @@ static unsigned int mss = 0;
 static int info = 0;
 static unsigned int sleep_second = 0;
 static int disconnect = 0;
+static uint32_t seq = 0;
+static uint32_t ack_seq = 0;
 
 #define FL_FLAGS	0x0100
 #define FL_ECN		0x0200
@@ -178,6 +180,10 @@ static CLIF_option tcp_options[] = {
 				CLIF_set_uint, &sleep_second, 0, 0 },
 	{ 0, "disconnect", 0, "Allow to connected after disconnect",
 				CLIF_set_flag, &disconnect, 0, 0 },
+	{ 0, "seq", "NUM", "Sequence number",
+				CLIF_set_uint, &seq, 0, 0 },
+	{ 0, "ackseq", "NUM", "Ack sequence number",
+				CLIF_set_uint, &ack_seq, 0, 0 },
 				
 	CLIF_END_OPTION
 };
@@ -207,6 +213,101 @@ static int check_sysctl (const char *name) {
 	return 0;
 }
 
+static void create_channel()
+{
+	int fd = socket(dest_addr.sa.sa_family, SOCK_STREAM, IPPROTO_TCP);
+
+	if (fd == -1)
+	{
+		error("socket");
+	}
+
+	bind_socket (fd);
+
+	sockaddr_any dst = dest_addr;
+	dst.sin.sin_port = dest_port;
+
+	if (connect(fd, &dst.sin, sizeof(dst)) == -1)
+	{
+		error("connect");
+	}
+
+	sockaddr_any addr;
+	socklen_t len = sizeof(addr);
+
+	if (getsockname (fd, &addr.sa, &len) < 0)
+		error ("getsockname");
+
+	src_port = ntohs(addr.sin.sin_port);
+	src_addr.sin.sin_port = addr.sin.sin_port;
+
+	printf("connected");
+	print_addr(&addr);
+	printf(":%u >", ntohs(src_addr.sin.sin_port));
+	print_addr(&dst);
+	printf(":%u", ntohs(dst.sin.sin_port));
+
+	if (disconnect)
+	{
+		struct tcp_info info = {0};
+		int length = sizeof(struct tcp_info);
+
+		if (getsockopt(fd, SOL_TCP, TCP_INFO, (void *)&info, (socklen_t *)&length ) == -1)
+		{
+			error ("getsockopt");
+		}
+
+		if (info.tcpi_rtt > 0)
+		{
+			int second = (int)ceil((double)info.tcpi_rtt * 10 / 1000000);
+			struct linger l = {1, 1};
+
+			if (second > 0)
+			{
+				l.l_linger = second;
+			}
+
+			if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1)
+			{
+				error ("setsockopt");
+			}
+		}
+
+		close(fd);
+
+		printf(" [Disconnect the success]");
+	}
+
+	printf("\n");
+}
+
+static void wait_a_second()
+{
+	int fd = socket (dest_addr.sa.sa_family, SOCK_RAW, IPPROTO_TCP);
+
+	if (fd < 0)
+		error_or_perm ("socket");
+
+	close(fd);
+
+	time_t rawtime;
+	struct tm * timeinfo;
+	char now[80] = {0};
+	char end[80] = {0};
+
+	time (&rawtime);
+	timeinfo = localtime(&rawtime);
+
+	strftime(now, sizeof(now),"%H:%M:%S", timeinfo);
+
+	rawtime += sleep_second;
+	timeinfo = localtime(&rawtime);
+
+	strftime(end, sizeof(now),"%H:%M:%S", timeinfo);
+
+	printf("Now it's %s, sleeping %us, will end at %s.\n", now, sleep_second, end);
+	sleep (sleep_second);
+}
 
 static int tcp_init (const sockaddr_any *dest,
 			    unsigned int port_seq, size_t *packet_len_p) {
@@ -226,98 +327,12 @@ static int tcp_init (const sockaddr_any *dest,
 	//connect
 	if (flags != 0 && flags != TH_SYN && src_addr.sin.sin_port == 0)
 	{
-		int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-		if (fd == -1)
-		{
-			error("socket");
-		}
-
-		bind_socket (fd);
-
-		sockaddr_any dst = *dest;
-		dst.sin.sin_port = dest_port;
-
-		if (connect(fd, &dst.sin, sizeof(dst)) == -1)
-		{
-			error("connect");
-		}
-
-		sockaddr_any addr;
-		socklen_t len = sizeof(addr);
-
-		if (getsockname (fd, &addr.sa, &len) < 0)
-			error ("getsockname");
-
-		src_port = ntohs(addr.sin.sin_port);
-		src_addr.sin.sin_port = addr.sin.sin_port;
-
-		printf("connected");
-		print_addr(&addr);
-		printf(":%u >", ntohs(src_addr.sin.sin_port));
-		print_addr(&dst);
-		printf(":%u", ntohs(dst.sin.sin_port));
-
-		if (disconnect)
-		{
-			struct tcp_info info = {0};
-			int length = sizeof(struct tcp_info);
-
-			if (getsockopt(fd, SOL_TCP, TCP_INFO, (void *)&info, (socklen_t *)&length ) == -1)
-			{
-				error ("getsockopt");
-			}
-
-			if (info.tcpi_rtt > 0)
-			{
-				int second = (int)ceil((double)info.tcpi_rtt * 10 / 1000000);
-				struct linger l = {1, 1};
-
-				if (second > 0)
-				{
-					l.l_linger = second;
-				}
-
-				if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1)
-				{
-					error ("setsockopt");
-				}
-			}
-
-			close(fd);
-
-			printf(" [Disconnect the success]");
-		}
-
-		printf("\n");
+		create_channel();
 	}
 
 	if (sleep_second > 0)
 	{
-		int fd = socket (af, SOCK_RAW, IPPROTO_TCP);
-		
-		if (fd < 0)
-			error_or_perm ("socket");
-		
-		close(fd);
-
-		time_t rawtime;
-	 	struct tm * timeinfo;
-		char now[80] = {0};
-		char end[80] = {0};
-
-		time (&rawtime);
-		timeinfo = localtime(&rawtime);
-
-		strftime(now, sizeof(now),"%H:%M:%S", timeinfo);
-
-		rawtime += sleep_second;
-		timeinfo = localtime(&rawtime);
-
-		strftime(end, sizeof(now),"%H:%M:%S", timeinfo);
-
-		printf("Now it's %s, sleeping %us, will end at %s.\n", now, sleep_second, end);
-		sleep (sleep_second);
+		wait_a_second();
 	}
 
 	/*  Create raw socket for tcp   */
@@ -414,15 +429,20 @@ static int tcp_init (const sockaddr_any *dest,
 
 	th = (struct tcphdr *) ptr;
 
-	th->source = 0;	    /*  temporary   */
+	th->source = 0;
 	th->dest = dest_port;
-	th->seq = 0;	    /*  temporary   */
-	th->ack_seq = 0;
+	th->seq = htonl(seq);	   
+	th->ack_seq = htonl(ack_seq);
 	th->doff = 0;	    /*  later...  */
 	TH_FLAGS(th) = flags & 0xff;
 	th->window = htons (4 * mtu);
 	th->check = 0;
 	th->urg_ptr = 0;
+
+	if (th->ack_seq != 0)
+	{
+		flags |= TH_ACK;
+	}
 
 
 	/*  Build TCP options   */
@@ -528,8 +548,11 @@ static void tcp_send_probe (probe *pb, int ttl) {
 	  send RST in such a situation automatically (we have to do nothing).
 	*/
 
-	th->seq = random_seq ();
-
+	if (seq == 0)
+	{
+		th->seq = random_seq ();
+	}
+	
 	th->check = 0;
 	th->check = in_csum (buf, csum_len);
 
