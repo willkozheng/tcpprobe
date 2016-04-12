@@ -25,6 +25,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <errno.h>
 
 
 #include "traceroute.h"
@@ -41,6 +42,7 @@ static sockaddr_any dest_addr = {{ 0, }, };
 static unsigned int dest_port = 0;
 
 static int raw_sk = -1;
+static int channel_sk = -1;
 static int last_ttl = 0;
 
 static uint8_t buf[1024];	    /*  enough, enough...  */
@@ -213,21 +215,30 @@ static int check_sysctl (const char *name) {
 	return 0;
 }
 
+static void time_to_str(const time_t rawtime, char *buf, const size_t buf_len)
+{
+	struct tm * timeinfo;
+	
+	timeinfo = localtime(&rawtime);
+
+	strftime(buf, buf_len,"%H:%M:%S", timeinfo);
+}
+
 static void create_channel()
 {
-	int fd = socket(dest_addr.sa.sa_family, SOCK_STREAM, IPPROTO_TCP);
+	channel_sk = socket(dest_addr.sa.sa_family, SOCK_STREAM, IPPROTO_TCP);
 
-	if (fd == -1)
+	if (channel_sk == -1)
 	{
 		error("socket");
 	}
 
-	bind_socket (fd);
+	bind_socket (channel_sk);
 
 	sockaddr_any dst = dest_addr;
 	dst.sin.sin_port = dest_port;
 
-	if (connect(fd, &dst.sin, sizeof(dst)) == -1)
+	if (connect(channel_sk, &dst.sin, sizeof(dst)) == -1)
 	{
 		error("connect");
 	}
@@ -235,7 +246,7 @@ static void create_channel()
 	sockaddr_any addr;
 	socklen_t len = sizeof(addr);
 
-	if (getsockname (fd, &addr.sa, &len) < 0)
+	if (getsockname (channel_sk, &addr.sa, &len) < 0)
 		error ("getsockname");
 
 	src_port = ntohs(addr.sin.sin_port);
@@ -252,7 +263,7 @@ static void create_channel()
 		struct tcp_info info = {0};
 		int length = sizeof(struct tcp_info);
 
-		if (getsockopt(fd, SOL_TCP, TCP_INFO, (void *)&info, (socklen_t *)&length ) == -1)
+		if (getsockopt(channel_sk, SOL_TCP, TCP_INFO, (void *)&info, (socklen_t *)&length ) == -1)
 		{
 			error ("getsockopt");
 		}
@@ -267,18 +278,58 @@ static void create_channel()
 				l.l_linger = second;
 			}
 
-			if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1)
+			if (setsockopt(channel_sk, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1)
 			{
 				error ("setsockopt");
 			}
 		}
 
-		close(fd);
+		close(channel_sk);
+		channel_sk = -1;
 
 		printf(" [Disconnect the success]");
 	}
 
+	int val = fcntl(channel_sk, F_GETFL, 0);
+	if (val == -1)
+		error ("fcntl GETFL");
+	
+	if (fcntl(channel_sk, F_SETFL, val | O_NONBLOCK | O_NDELAY) == -1)
+		error ("fcntl SETFL");
+
 	printf("\n");
+}
+
+static void check_channel()
+{
+	if (channel_sk == -1)
+	{
+		return;
+	}
+
+	char buf[1024];
+	ssize_t n;
+
+	while ((n = read(channel_sk, buf, sizeof(buf))) > 0)
+	{
+	}
+
+	if (n == 0)
+	{
+		time_t rawtime;
+		char now[80] = {0};
+
+		time (&rawtime);
+
+		time_to_str(rawtime, now, sizeof(now));
+		fprintf(stderr, " [%s Connection closed by peer] ", now);
+	}
+
+	if (n == -1 && errno != EAGAIN)
+	{
+		fprintf(stderr, "Connection exception, errno:%d errmsg:%s.", errno, strerror(errno));
+		exit(5);
+	}
 }
 
 static void wait_a_second()
@@ -291,21 +342,15 @@ static void wait_a_second()
 	close(fd);
 
 	time_t rawtime;
-	struct tm * timeinfo;
-	char now[80] = {0};
 	char end[80] = {0};
 
 	time (&rawtime);
-	timeinfo = localtime(&rawtime);
-
-	strftime(now, sizeof(now),"%H:%M:%S", timeinfo);
 
 	rawtime += sleep_second;
-	timeinfo = localtime(&rawtime);
+	
+	time_to_str(rawtime, end, sizeof(end));
 
-	strftime(end, sizeof(now),"%H:%M:%S", timeinfo);
-
-	printf("Now it's %s, sleeping %us, will end at %s.\n", now, sleep_second, end);
+	printf("sleeping %us, will end at %s.\n", sleep_second, end);
 	sleep (sleep_second);
 }
 
@@ -317,6 +362,15 @@ static int tcp_init (const sockaddr_any *dest,
 	socklen_t len;
 	uint8_t *ptr;
 	uint16_t *lenp;
+
+	time_t rawtime;
+	char now[80] = {0};
+
+	time (&rawtime);
+
+	time_to_str(rawtime, now, sizeof(now));
+
+	printf("Now it's %s\n", now);
 
 	dest_addr = *dest;
 	dest_addr.sin.sin_port = 0;	/*  raw sockets can be confused   */
@@ -510,6 +564,8 @@ static void tcp_send_probe (probe *pb, int ttl) {
 	int sk;
 	int af = dest_addr.sa.sa_family;
 
+	check_channel();
+
 	/*  To make sure we have chosen a free unused "source port",
 	   just create, (auto)bind and hold a socket while the port is needed.
 	*/
@@ -625,6 +681,8 @@ static probe *tcp_check_reply (int sk, int err, sockaddr_any *from,
 
 static void tcp_recv_probe (int sk, int revents) {
 
+	check_channel();
+
 	if (!(revents & (POLLIN | POLLERR)))
 		return;
 
@@ -633,7 +691,7 @@ static void tcp_recv_probe (int sk, int revents) {
 
 
 static void tcp_expire_probe (probe *pb) {
-
+	check_channel();
 	probe_done (pb);
 }
 
